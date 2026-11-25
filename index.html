@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -11,7 +12,10 @@ canvas#c{position:fixed;inset:0;width:100%;height:100%}
 .bar{height:8px;background:#23394d;margin:3px 0 6px}.bar i{display:block;height:100%;width:0;background:var(--grn)}
 #side{right:10px;top:10px;text-align:right}
 #msg{left:50%;bottom:64px;transform:translateX(-50%);font-size:18px;display:none;text-align:center}
-#help{left:10px;bottom:10px;font-size:12px;opacity:.85}
+#help{left:10px;bottom:10px;font-size:12px;opacity:.9;max-width:min(520px,90vw)}
+#modeBtn{position:fixed;right:245px;bottom:12px;z-index:5;padding:9px 13px;background:rgba(11,27,43,.92);border:1px solid var(--brass);color:var(--foam);font-weight:bold}
+#crosshair{position:fixed;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:#fff;box-shadow:0 0 4px #000;transform:translate(-50%,-50%);display:none;pointer-events:none}
+#walkNote{position:fixed;left:50%;top:58px;transform:translateX(-50%);display:none;background:rgba(11,27,43,.8);padding:6px 10px;border:1px solid rgba(217,164,65,.5);border-radius:4px;font-size:12px;text-align:center}
 #warn{left:50%;top:14px;transform:translateX(-50%);display:none;color:var(--red);font-weight:bold;border-color:var(--red)}
 #port,#over{left:50%;top:50%;transform:translate(-50%,-50%);display:none;max-width:min(680px,94vw);max-height:90vh;overflow:auto;background:rgba(8,20,32,.96)}
 h2{margin:0 0 6px;color:var(--brass)}h3{margin:12px 0 4px;font-size:15px;border-bottom:1px solid #345}
@@ -24,7 +28,8 @@ button:hover{background:var(--brass);color:var(--ink)}button:focus-visible{outli
 <div id="hud" class="p"></div>
 <div id="side" class="p"><canvas id="map" width="220" height="130"></canvas><div id="wx"></div></div>
 <div id="warn" class="p"></div><div id="msg" class="p"></div>
-<div id="help" class="p">W/S throttle · A/D rudder · Space stop · E dock at a port beacon · drag mouse to look · wheel to zoom</div>
+<div id="help" class="p">Ship mode: W/S throttle · A/D rudder · Space stop · E dock · drag mouse to look · wheel to zoom</div>
+<button id="modeBtn" type="button">Enter First-Person Walk</button><div id="crosshair"></div><div id="walkNote">WASD move · Mouse look · Shift walk faster · E exit walk mode · Esc releases mouse</div>
 <div id="port" class="p"></div><div id="over" class="p"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -32,12 +37,10 @@ button:hover{background:var(--brass);color:var(--ink)}button:focus-visible{outli
 const G=9.8, $=id=>document.getElementById(id), cl=(v,a,b)=>Math.max(a,Math.min(b,v));
 const sm=(a,b,x)=>{const t=cl((x-a)/(b-a),0,1);return t*t*(3-2*t)};
 /* ---------- data ---------- */
-// V = hull volume (m3). Light hull = 35% of V, safe cargo capacity = 55% of V, leaving ~10% of hull height as freeboard.
 const mk=(n,L,W,H,spd,cost,col)=>({n,L,W,H,spd,cost,col,V:L*W*H,light:.35*L*W*H,cap:Math.floor(.55*L*W*H)});
 const SHIPS=[mk('Coaster',14,4.5,2.4,11,0,0x9c3b2e),mk('Freighter',22,6.5,3.2,10,22000,0x2f5d8a),mk('Bulk Carrier',34,9,4.5,8.5,110000,0x2e6b4f)];
 const CARGO=[{n:'Grain',p:12},{n:'Coal',p:20},{n:'Oil',p:35},{n:'Steel',p:55},{n:'Electronics',p:95}];
 const CCOL=[0xe0c060,0x222222,0x111a33,0x8a98a5,0xc04bd0];
-// price multipliers per cargo; coastal ports far out in dangerous water pay more
 const PORTS=[
  {n:'Marlow',x:-300,z:320,r:50,m:[.6,1.1,1.2,.9,1.0]},
  {n:'Sunhaven',x:-700,z:-150,r:60,m:[1.3,.6,1.0,1.1,.8]},
@@ -45,7 +48,7 @@ const PORTS=[
  {n:'Stormhold',x:720,z:-100,r:70,m:[1.7,1.6,.9,1.8,1.9]},
  {n:"Gale's Rest",x:900,z:400,r:60,m:[1.6,1.9,1.7,1.5,.9]}];
 const ISL=[{x:-500,z:-400,r:40},{x:150,z:-480,r:35},{x:560,z:150,r:45},{x:-120,z:560,r:30},{x:1000,z:-300,r:50}];
-const WALLS=[{x0:-120,x1:120,z0:-420,z1:-13},{x0:-120,x1:120,z0:13,z1:420}]; // canal runs east-west between them at z=0
+const WALLS=[{x0:-120,x1:120,z0:-420,z1:-13},{x0:-120,x1:120,z0:13,z1:420}];
 PORTS.forEach(p=>{const d=Math.hypot(p.x,p.z)||1;p.dx=-p.x/d;p.dz=-p.z/d;p.bx=p.x+p.dx*(p.r+10);p.bz=p.z+p.dz*(p.r+10)});
 const LAND=[...PORTS.map(p=>({x:p.x,z:p.z,r:p.r*.9})),...ISL.map(i=>({x:i.x,z:i.z,r:i.r*.9}))];
 const WX=['Calm','Breeze','Squall','Storm','Hurricane'], WAMP=[.35,.9,1.8,3.0,4.2];
@@ -54,27 +57,37 @@ const WAVES=[[.5,.4,60,0],[.3,1.2,38,1.7],[.45,-.5,95,3.1],[.15,2.2,24,4.4]].map
 let T=0, wxLevel=1, wxTarget=1, wxTimer=40, wxNext=1;
 const danger=x=>.5+.5*sm(-450,-350,x)+.8*sm(350,450,x);
 const canal=(x,z)=>1-.88*(1-sm(14,40,Math.abs(z)))*(1-sm(120,200,Math.abs(x)));
-const amp=(x,z)=>WAMP[0]+(WAMP[Math.min(4,Math.floor(wxLevel))]*(1-(wxLevel%1))+WAMP[Math.min(4,Math.floor(wxLevel)+1)]*(wxLevel%1)-WAMP[0])*1;
 function ampAt(x,z){const f=Math.floor(cl(wxLevel,0,3.999)),t=wxLevel-f;return (WAMP[f]*(1-t)+WAMP[f+1]*t)*danger(x)*canal(x,z)}
 function waveH(x,z,A){let h=0;for(const w of WAVES)h+=w.a*Math.sin(w.kx*x+w.kz*z-w.w*T+w.ph);return h*A}
 /* ---------- three ---------- */
-const R=new THREE.WebGLRenderer({canvas:$('c'),antialias:true});R.setPixelRatio(Math.min(devicePixelRatio,2));
+const R=new THREE.WebGLRenderer({canvas:$('c'),antialias:true,powerPreference:'high-performance'});
+R.setPixelRatio(Math.min(devicePixelRatio,2));
+R.outputEncoding=THREE.sRGBEncoding;
+R.toneMapping=THREE.ACESFilmicToneMapping;
+R.toneMappingExposure=1.12;
+R.shadowMap.enabled=true;
+R.shadowMap.type=THREE.PCFSoftShadowMap;
 const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(60,1,.5,2500);
 const SKYC=new THREE.Color(0x8cc0e8),STORMC=new THREE.Color(0x232c36);
 scene.fog=new THREE.Fog(0x8cc0e8,150,900);
-const hemi=new THREE.HemisphereLight(0xcfe6ff,0x203040,.9),sun=new THREE.DirectionalLight(0xfff0d0,1);sun.position.set(200,300,100);scene.add(hemi,sun);
+const hemi=new THREE.HemisphereLight(0xcfeaff,0x243748,1.05);
+const sun=new THREE.DirectionalLight(0xffe5bd,2.1);
+sun.position.set(-180,260,140);sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.left=-180;sun.shadow.camera.right=180;sun.shadow.camera.top=180;sun.shadow.camera.bottom=-180;
+scene.add(hemi,sun);scene.add(new THREE.AmbientLight(0x7899b2,.22));
 const SEG=170,SIZE=700,og=new THREE.PlaneGeometry(SIZE,SIZE,SEG,SEG);og.rotateX(-Math.PI/2);
 og.setAttribute('color',new THREE.BufferAttribute(new Float32Array(og.attributes.position.count*3),3));
-const ocean=new THREE.Mesh(og,new THREE.MeshPhongMaterial({vertexColors:true,shininess:70,specular:0x446688}));scene.add(ocean);
-const step=SIZE/SEG, base=new THREE.Color(0x1a6aa0), deep=new THREE.Color(0x0d3a5e), white=new THREE.Color(0xe8f4f8), tmp=new THREE.Color();
+const ocean=new THREE.Mesh(og,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.24,metalness:.22,envMapIntensity:1.15}));
+ocean.receiveShadow=true;scene.add(ocean);
+const step=SIZE/SEG,base=new THREE.Color(0x1a6aa0),deep=new THREE.Color(0x0d3a5e),white=new THREE.Color(0xe8f4f8),tmp=new THREE.Color();
 function updateOcean(cx,cz){
- const ox=Math.round(cx/step)*step, oz=Math.round(cz/step)*step, P=og.attributes.position, C=og.attributes.color;
+ const ox=Math.round(cx/step)*step,oz=Math.round(cz/step)*step,P=og.attributes.position,C=og.attributes.color;
  ocean.position.set(ox,0,oz);
  for(let i=0;i<P.count;i++){const x=P.getX(i)+ox,z=P.getZ(i)+oz,A=ampAt(x,z),h=waveH(x,z,A);P.setY(i,h);
   tmp.copy(deep).lerp(base,cl(.5+h/(A*1.6+.5),0,1)).lerp(white,sm(.55,.95,h/(A*1.2+.3))*(A>.6?1:A/.6));C.setXYZ(i,tmp.r,tmp.g,tmp.b)}
  P.needsUpdate=C.needsUpdate=true;og.computeVertexNormals();
 }
-// land
 const mat=(c)=>new THREE.MeshLambertMaterial({color:c});
 function addIsland(i,port){const g=new THREE.Mesh(new THREE.ConeGeometry(i.r,i.r*.5,24),mat(0x6d8b4a));g.position.set(i.x,i.r*.1,i.z);scene.add(g);
  const s=new THREE.Mesh(new THREE.CylinderGeometry(i.r*1.02,i.r*1.1,2,24),mat(0xd8c58f));s.position.set(i.x,-.5,i.z);scene.add(s);
@@ -83,7 +96,6 @@ function addIsland(i,port){const g=new THREE.Mesh(new THREE.ConeGeometry(i.r,i.r
   const beam=new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.5,90,8),new THREE.MeshBasicMaterial({color:0xd9a441,transparent:true,opacity:.45}));beam.position.set(port.bx,45,port.bz);scene.add(beam);}}
 PORTS.forEach(p=>addIsland(p,p));ISL.forEach(i=>addIsland(i));
 WALLS.forEach(w=>{const b=new THREE.Mesh(new THREE.BoxGeometry(w.x1-w.x0,10,w.z1-w.z0),mat(0x5f7a48));b.position.set((w.x0+w.x1)/2,3,(w.z0+w.z1)/2);scene.add(b)});
-// rain
 const RN=900,rp=new Float32Array(RN*6);for(let i=0;i<RN;i++){const x=(Math.random()-.5)*160,y=Math.random()*70,z=(Math.random()-.5)*160;rp.set([x,y,z,x+.3,y-2,z],i*6)}
 const rg=new THREE.BufferGeometry();rg.setAttribute('position',new THREE.BufferAttribute(rp,3));
 const rain=new THREE.LineSegments(rg,new THREE.LineBasicMaterial({color:0xaac4d8,transparent:true,opacity:0}));rain.frustumCulled=false;scene.add(rain);
@@ -91,20 +103,55 @@ const rain=new THREE.LineSegments(rg,new THREE.LineBasicMaterial({color:0xaac4d8
 const shipObj=new THREE.Group();scene.add(shipObj);let cargoMesh;
 function buildShip(s){
  shipObj.clear();const {L,W,H}=s;
- const hull=new THREE.Mesh(new THREE.BoxGeometry(W,H,L*.78),mat(s.col));hull.position.set(0,H/2,-L*.11);
- const bg=new THREE.ConeGeometry(W/Math.SQRT2,L*.22,4);bg.rotateY(Math.PI/4);bg.rotateX(Math.PI/2);bg.scale(1,H/W,1);
- const bow=new THREE.Mesh(bg,mat(s.col));bow.position.set(0,H/2,L*.28+L*.11*0);
- const cab=new THREE.Mesh(new THREE.BoxGeometry(W*.7,H*.9,L*.18),mat(0xe8eef2));cab.position.set(0,H+H*.45,-L*.36);
- const fun=new THREE.Mesh(new THREE.CylinderGeometry(W*.1,W*.12,H*.6,10),mat(0xd9a441));fun.position.set(0,H*1.9,-L*.36);
- const deck=new THREE.Mesh(new THREE.BoxGeometry(W*.96,.15,L*.78),mat(0x3a3f45));deck.position.set(0,H+.05,-L*.11);
- cargoMesh=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),mat(0xffffff));
- shipObj.add(hull,bow,deck,cab,fun,cargoMesh);
+ const paint=(color,rough=.72,metal=0)=>new THREE.MeshStandardMaterial({color,roughness:rough,metalness:metal});
+ const hullMat=paint(s.col,.48,.28),deckMat=paint(0x46525a,.84,.12);
+ const whiteMat=paint(0xe4e8e8,.55,.16),darkMat=paint(0x182b38,.35,.35);
+ const brassMat=paint(0xd6a34b,.38,.55),glassMat=new THREE.MeshStandardMaterial({color:0x78b6ce,metalness:.35,roughness:.16});
+ const redMat=paint(0xb43e35,.5,.25);
+ const add=(geo,material,x,y,z,group=shipObj)=>{const m=new THREE.Mesh(geo,material);m.position.set(x,y,z);m.castShadow=true;m.receiveShadow=true;group.add(m);return m};
+ add(new THREE.BoxGeometry(W,H,L*.78),hullMat,0,H/2,-L*.08);
+ const bow=add(new THREE.ConeGeometry(W*.69,L*.27,4),hullMat,0,H*.48,L*.39);bow.rotation.x=Math.PI/2;bow.scale.set(1,H/W,1);
+ add(new THREE.BoxGeometry(W*.96,H*.86,L*.16),hullMat,0,H*.43,-L*.43);
+ add(new THREE.BoxGeometry(W*.94,.22,L*.76),deckMat,0,H+.05,-L*.08);
+ add(new THREE.BoxGeometry(W*.94,.32,.24),whiteMat,0,H+.16,L*.29);
+ add(new THREE.BoxGeometry(W*.94,.32,.24),whiteMat,0,H+.16,-L*.43);
+ const bridgeZ=-L*.34;
+ add(new THREE.BoxGeometry(W*.68,H*.86,L*.19),whiteMat,0,H*1.42,bridgeZ);
+ add(new THREE.BoxGeometry(W*.72,.16,L*.22),darkMat,0,H*1.88,bridgeZ);
+ for(let i=-2;i<=2;i++)add(new THREE.BoxGeometry(W*.105,H*.22,.035),glassMat,i*W*.12,H*1.62,bridgeZ+L*.096);
+ add(new THREE.BoxGeometry(W*.72,.12,L*.20),whiteMat,0,H*1.98,bridgeZ);
+ add(new THREE.CylinderGeometry(W*.105,W*.13,H*.65,16),redMat,0,H*2.3,bridgeZ-L*.025);
+ add(new THREE.CylinderGeometry(W*.11,W*.11,.12,16),darkMat,0,H*2.63,bridgeZ-L*.025);
+ add(new THREE.CylinderGeometry(.07,.11,H*1.15,8),brassMat,0,H*2.55,bridgeZ+L*.03);
+ add(new THREE.BoxGeometry(W*.55,.07,.07),brassMat,0,H*2.92,bridgeZ+L*.03);
+ add(new THREE.SphereGeometry(.16,10,8),new THREE.MeshBasicMaterial({color:0xffd66b}),0,H*3.0,bridgeZ+L*.03);
+ const containerGroup=new THREE.Group();shipObj.add(containerGroup);
+ const colors=[0xb94736,0x315f86,0x3f765b,0xc28a36,0x66717d,0x8d4c86];
+ const rows=s.n==='Coaster'?1:(s.n==='Freighter'?2:3),cols=s.n==='Coaster'?2:(s.n==='Freighter'?3:4);
+ const cw=W*.31,cl=L*.13,ch=H*.42;
+ for(let row=0;row<rows;row++)for(let col=0;col<cols;col++){
+  const x=(col-(cols-1)/2)*cw*1.06,z=(row-(rows-1)/2)*cl*1.12-L*.03;
+  const cm=paint(colors[(row*cols+col)%colors.length],.68,.12);
+  add(new THREE.BoxGeometry(cw,ch,cl),cm,x,H+ch/2+.12,z,containerGroup);
+  for(let rib=0;rib<7;rib++)add(new THREE.BoxGeometry(.025,ch*.94,.025),darkMat,x-cw*.46+rib*cw*.153,H+ch/2+.12,z+cl*.505,containerGroup);
+ }
+ for(const side of [-1,1]){
+  for(let j=0;j<9;j++){const z=-L*.38+j*L*.085;add(new THREE.CylinderGeometry(.035,.035,H*.34,6),brassMat,side*W*.49,H+H*.17,z)}
+  add(new THREE.BoxGeometry(.055,.055,L*.72),brassMat,side*W*.49,H+H*.34,-L*.06);
+ }
+ for(const side of [-1,1]){
+  add(new THREE.CylinderGeometry(.12,.12,.18,12),darkMat,side*W*.32,H+.16,L*.39);
+  add(new THREE.BoxGeometry(.12,.12,.9),brassMat,side*W*.32,H+.25,L*.34);
+ }
+ cargoMesh=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),paint(0xffffff,.7,.08));cargoMesh.visible=false;shipObj.add(cargoMesh);
 }
 /* ---------- game state ---------- */
 let S,docked=null,msgT=0,over=0,sunkT=0,capT=0,deckWet=0,lastSplash=0,flash=0,hasInput=false;
 const keys={};let camYaw=0,camPit=.35,camDist=1;
+let walkMode=false,walkX=0,walkZ=0,walkYaw=0,walkPitch=0;
+const walkLocal=new THREE.Vector3(),walkWorld=new THREE.Vector3();
 function newGame(money){
- const p=PORTS[0];
+ const p=PORTS[0];walkMode=false;updateWalkUI();
  S={ship:SHIPS[0],money,cargo:{t:0,type:0},water:0,hull:100,x:p.bx+p.dx*18,z:p.bz+p.dz*18,y:0,vy:0,yaw:Math.atan2(p.dx,p.dz),pitch:0,roll:0,wp:0,wr:0,speed:0,thr:0,rud:0,state:'sail',tr:0};
  buildShip(S.ship);over=0;sunkT=0;capT=0;$('over').style.display='none';
 }
@@ -115,149 +162,147 @@ function toast(t,ms=2200){const m=$('msg');m.textContent=t;m.style.display='bloc
 const tv=new THREE.Vector3(),tv2=new THREE.Vector3();
 function physics(dt){
  const s=S.ship,{L,W,H}=s,m=mass(),K=G*L*W;
- // ----- steering / propulsion -----
  if(S.state==='sail'&&!docked){
-  if(keys.w)S.thr=Math.min(1,S.thr+.4*dt);if(keys.s)S.thr=Math.max(-.35,S.thr-.5*dt);if(keys[' '])S.thr*=Math.max(0,1-2*dt);
-  const tr=(keys.a?1:0)-(keys.d?1:0);S.rud+=(tr-S.rud)*Math.min(1,3*dt);
- } else {S.thr=0;S.rud*=.9}
- const wet=cl(S.water/(s.cap*.5),0,1);
- const target=S.thr*s.spd*(1-.5*wet)*(S.state==='sail'?1:0);
+  if(!walkMode){if(keys.w)S.thr=Math.min(1,S.thr+.4*dt);if(keys.s)S.thr=Math.max(-.35,S.thr-.5*dt);if(keys[' '])S.thr*=Math.max(0,1-2*dt);
+   const tr=(keys.a?1:0)-(keys.d?1:0);S.rud+=(tr-S.rud)*Math.min(1,3*dt)}
+ }else{S.thr=0;S.rud*=.9}
+ const wet=cl(S.water/(s.cap*.5),0,1),target=S.thr*s.spd*(1-.5*wet)*(S.state==='sail'?1:0);
  S.speed+=(target-S.speed)*(.12+.1*(1-m/s.V))*dt*3;
  const yawRate=S.rud*(.5*cl(Math.abs(S.speed)/5,0,1))*Math.sign(S.speed||1)*(14/s.L>1?1:Math.sqrt(14/s.L)+.2>1?1:Math.sqrt(14/s.L)+.2);
  S.yaw+=yawRate*dt;S.x+=Math.sin(S.yaw)*S.speed*dt;S.z+=Math.cos(S.yaw)*S.speed*dt;
- // collisions
  const sr=W*.75;let hit=0;
  for(const c of LAND){const dx=S.x-c.x,dz=S.z-c.z,d=Math.hypot(dx,dz);if(d<c.r+sr){const n=(c.r+sr-d)/(d||1);S.x+=dx*n;S.z+=dz*n;hit=1}}
  for(const w of WALLS){const nx=cl(S.x,w.x0,w.x1),nz=cl(S.z,w.z0,w.z1),dx=S.x-nx,dz=S.z-nz,d=Math.hypot(dx,dz);
   if(d<sr){const n=d>.001?(sr-d)/d:0;if(d>.001){S.x+=dx*n;S.z+=dz*n}else S.z+=(S.z>0?1:-1)*sr;hit=1}}
- if(hit&&Math.abs(S.speed)>2.5){S.hull-=(Math.abs(S.speed)-2)*1.6;toast('💥 Hull struck land! Integrity '+Math.max(0,Math.round(S.hull))+'%');S.speed*=-.3;S.thr=0}
- else if(hit)S.speed*=.9;
+ if(hit&&Math.abs(S.speed)>2.5){S.hull-=(Math.abs(S.speed)-2)*1.6;toast('💥 Hull struck land! Integrity '+Math.max(0,Math.round(S.hull))+'%');S.speed*=-.3;S.thr=0}else if(hit)S.speed*=.9;
  const bx=S.x<-1000||S.x>1200||S.z<-600||S.z>650;if(bx){S.x=cl(S.x,-1000,1200);S.z=cl(S.z,-600,650);S.speed*=.9;toast('Edge of the charted sea — turn back')}
- // ----- buoyancy: four hull corners, each carries a quarter of the waterplane -----
  shipObj.rotation.set(S.pitch,S.yaw,S.roll,'YXZ');shipObj.position.set(S.x,S.y,S.z);shipObj.updateMatrixWorld(true);
  let Fy=0,Tx=0,Tz=0,ingress=0,worst=0;const buoy=S.state==='sail'?1:S.state==='capsized'?Math.max(0,1-sunkT/3):0;
  for(const [lx,lz] of [[W/2,L/2],[-W/2,L/2],[W/2,-L/2],[-W/2,-L/2]]){
   tv.set(lx,0,lz).applyMatrix4(shipObj.matrixWorld);const h=waveH(tv.x,tv.z,ampAt(tv.x,tv.z));
   const sub=cl(h-tv.y,0,H*1.15),f=K/4*sub*buoy;Fy+=f;Tx+=-lz*f;Tz+=lx*f;
-  tv2.set(lx,H,lz).applyMatrix4(shipObj.matrixWorld);const ex=waveH(tv2.x,tv2.z,ampAt(tv2.x,tv2.z))-tv2.y; // water above the deck edge
+  tv2.set(lx,H,lz).applyMatrix4(shipObj.matrixWorld);const ex=waveH(tv2.x,tv2.z,ampAt(tv2.x,tv2.z))-tv2.y;
   if(ex>0){ingress+=ex*(L*W/4)*.25;worst=Math.max(worst,ex)}
  }
- if(!docked&&S.state==='sail'){S.water+=ingress*dt;
-  if(S.hull<40)S.water+=.4*(1-S.hull/40)*(L*W/100)*dt;
-  S.water=Math.max(0,S.water-(ingress>0?.3:1)*L*W*.012*dt)}
+ if(!docked&&S.state==='sail'){S.water+=ingress*dt;if(S.hull<40)S.water+=.4*(1-S.hull/40)*(L*W/100)*dt;S.water=Math.max(0,S.water-(ingress>0?.3:1)*L*W*.012*dt)}
  else if(docked)S.water=Math.max(0,S.water-L*W*.1*dt);
  if(worst>.05&&performance.now()-lastSplash>2500){lastSplash=performance.now();toast('🌊 Wave over the deck! +'+(ingress).toFixed(1)+' t/s taking water',1800)}
  S.worst=worst;
- // stability: tall cargo and flooding both soften the righting moment
- const stab=cl(1-.25*S.cargo.t/s.cap-.6*wet,.25,1);
- const Ip=m*(L*L+H*H)/12*2,Ir=m*(W*W+H*H)/12*2.2;
+ const stab=cl(1-.25*S.cargo.t/s.cap-.6*wet,.25,1),Ip=m*(L*L+H*H)/12*2,Ir=m*(W*W+H*H)/12*2.2;
  S.vy+=((Fy-m*G)/m-1.4*S.vy)*dt;S.y+=S.vy*dt;
  S.wp+=((Tx/Ip)-1.3*S.wp)*dt;S.wr+=((Tz*stab/Ir)+yawRate*S.speed*.02-1.5*S.wr)*dt;
  S.pitch+=S.wp*dt;S.roll+=S.wr*dt;
- if(S.state==='capsized'){S.roll+=(Math.PI-Math.abs(S.roll))*Math.sign(S.roll||1)*.5*dt}
- // ----- failure conditions -----
+ if(S.state==='capsized')S.roll+=(Math.PI-Math.abs(S.roll))*Math.sign(S.roll||1)*.5*dt;
  tv.set(0,H*.5,0).applyMatrix4(shipObj.matrixWorld);const hc=waveH(tv.x,tv.z,ampAt(tv.x,tv.z));
  deckWet=tv.y<hc-.2?deckWet+dt:Math.max(0,deckWet-dt);
- if(S.state==='sail'){
-  capT=(Math.abs(S.roll)>1.35||Math.abs(S.pitch)>1.2)?capT+dt:0;
-  if(capT>1.2)endGame('capsized');else if(deckWet>2.2||S.hull<=0||S.water>m*.5)endGame('sank');
- } else {sunkT+=dt;if(S.state==='sunk'){S.vy-=2*dt}if(sunkT>4&&!over){over=1;showOver()}}
+ if(S.state==='sail'){capT=(Math.abs(S.roll)>1.35||Math.abs(S.pitch)>1.2)?capT+dt:0;if(capT>1.2)endGame('capsized');else if(deckWet>2.2||S.hull<=0||S.water>m*.5)endGame('sank')}
+ else{sunkT+=dt;if(S.state==='sunk')S.vy-=2*dt;if(sunkT>4&&!over){over=1;showOver()}}
 }
-function endGame(kind){S.state=kind==='sank'?'sunk':'capsized';sunkT=0;toast(kind==='sank'?'She is going down!':'CAPSIZED!',4000)}
-function showOver(){const lost=Math.round(S.money*.4);const o=$('over');o.style.display='block';
+function endGame(kind){if(walkMode)setWalkMode(false);S.state=kind==='sank'?'sunk':'capsized';sunkT=0;toast(kind==='sank'?'She is going down!':'CAPSIZED!',4000)}
+function showOver(){const lost=Math.round(S.money*.05),o=$('over');o.style.display='block';
  o.innerHTML=`<h2>${S.state==='sunk'?'Your ship sank':'Your ship capsized'}</h2><p>The cargo and the vessel are gone, and the insurers charge you ${'$'+lost.toLocaleString()}. You start over with a Coaster in Marlow.</p><button id="again">Take command again</button>`;
  $('again').onclick=()=>newGame(Math.max(600,S.money-lost))}
 /* ---------- weather ---------- */
 function weather(dt){
- wxTimer-=dt;
- if(wxTimer<=0){wxTarget=wxNext;wxTimer=50+Math.random()*60;
-  const r=Math.random();wxNext=r<.2?0:r<.45?1:r<.7?2:r<.9?3:4;if(wxNext>=3)toast('⛈ Forecast: '+WX[wxNext]+' approaching',3500)}
+ wxTimer-=dt;if(wxTimer<=0){wxTarget=wxNext;wxTimer=50+Math.random()*60;const r=Math.random();wxNext=r<.2?0:r<.45?1:r<.7?2:r<.9?3:4;if(wxNext>=3)toast('⛈ Forecast: '+WX[wxNext]+' approaching',3500)}
  wxLevel+=(wxTarget-wxLevel)*Math.min(1,dt*.05);
- const k=wxLevel/4;scene.background=SKYC.clone().lerp(STORMC,sm(0,.85,k));
- scene.fog.color.copy(scene.background);scene.fog.far=900-600*k;
- hemi.intensity=.9-.5*k+flash;sun.intensity=1-.9*k;
- flash=Math.max(0,flash-dt*3);if(wxLevel>2.6&&Math.random()<dt*.15*(wxLevel-2.4))flash=1.6;
+ const k=wxLevel/4;scene.background=SKYC.clone().lerp(STORMC,sm(0,.85,k));scene.fog.color.copy(scene.background);scene.fog.far=900-600*k;
+ hemi.intensity=.9-.5*k+flash;sun.intensity=1-.9*k;flash=Math.max(0,flash-dt*3);
+ if(wxLevel>2.6&&Math.random()<dt*.15*(wxLevel-2.4))flash=1.6;
  rain.material.opacity=sm(1.5,3.5,wxLevel)*.7;
- const P=rg.attributes.position;if(rain.material.opacity>.01){for(let i=0;i<RN;i++){let y=P.getY(i*2)-70*dt;if(y<0){y+=70}P.setY(i*2,y);P.setY(i*2+1,y-2)}P.needsUpdate=true}
+ const P=rg.attributes.position;if(rain.material.opacity>.01){for(let i=0;i<RN;i++){let y=P.getY(i*2)-70*dt;if(y<0)y+=70;P.setY(i*2,y);P.setY(i*2+1,y-2)}P.needsUpdate=true}
 }
 /* ---------- port UI ---------- */
 function nearestPort(){let b=null,bd=1e9;for(const p of PORTS){const d=Math.hypot(S.x-p.bx,S.z-p.bz);if(d<bd){bd=d;b=p}}return[b,bd]}
-function tryDock(){if(S.state!=='sail')return;const[p,d]=nearestPort();
- if(d>45)return toast('Nearest port is '+Math.round(d)+' m away — get within 45 m of the beacon');
- if(Math.abs(S.speed)>3)return toast('Too fast to dock — slow below 3 m/s');
- docked=p;S.speed=0;S.thr=0;renderPort()}
+function tryDock(){if(S.state!=='sail')return;const[p,d]=nearestPort();if(d>45)return toast('Nearest port is '+Math.round(d)+' m away — get within 45 m of the beacon');if(Math.abs(S.speed)>3)return toast('Too fast to dock — slow below 3 m/s');docked=p;S.speed=0;S.thr=0;renderPort()}
 function renderPort(){
  const p=docked,s=S.ship,c=S.cargo,lim=Math.floor(s.cap*1.3),over=c.t-s.cap;
  const status=c.t<=0?'':over>0?`<span class="bad">⚠ OVERLOADED by ${over.toFixed(1)} t — your deck will be awash in any swell.</span>`:c.t>s.cap*.85?'<span class="bad">Heavy: little freeboard left. Avoid rough seas.</span>':'<span class="ok">Load is within safe limits.</span>';
  let h=`<h2>${p.n}</h2><div>Cash <b>$${Math.round(S.money).toLocaleString()}</b> · ${s.n} · hull ${Math.round(S.hull)}% · safe capacity ${s.cap} t</div>
- <div>Hold: <b>${c.t>0?c.t.toFixed(1)+' t '+CARGO[c.type].n:'empty'}</b> ${status}</div>
- <h3>Cargo market</h3><table>`;
+ <div>Hold: <b>${c.t>0?c.t.toFixed(1)+' t '+CARGO[c.type].n:'empty'}</b> ${status}</div><h3>Cargo market</h3><table>`;
  CARGO.forEach((cg,i)=>{h+=`<tr><td>${cg.n}</td><td>buy $${price(p,i)}/t</td><td>sell $${(price(p,i)*.95).toFixed(1)}/t</td><td><button data-a="buy" data-i="${i}" data-n="1">+1 t</button><button data-a="buy" data-i="${i}" data-n="10">+10 t</button><button data-a="buy" data-i="${i}" data-n="-1">Fill to safe limit</button></td></tr>`});
- h+=`</table><div style="margin-top:6px">`;
- if(c.t>0)h+=`<button data-a="sell">Sell all for $${Math.round(c.t*price(p,c.type)*.95).toLocaleString()}</button><button data-a="dump">Jettison cargo</button><button data-a="less">Unload 1 t</button>`;
+ h+=`</table><div style="margin-top:6px">`;if(c.t>0)h+=`<button data-a="sell">Sell all for $${Math.round(c.t*price(p,c.type)*.95).toLocaleString()}</button><button data-a="dump">Jettison cargo</button><button data-a="less">Unload 1 t</button>`;
  h+=`</div><h3>Shipyard</h3><table>`;
- SHIPS.forEach((x,i)=>{const cur=x===s;const tp=Math.round(s.cost*.6);h+=`<tr><td>${x.n}</td><td>${x.cap} t</td><td>${x.spd} m/s</td><td>$${x.cost.toLocaleString()}</td><td>${cur?'<i>current</i>':`<button data-a="ship" data-i="${i}">Buy (trade-in $${tp.toLocaleString()})</button>`}</td></tr>`});
- h+=`</table><p><button data-a="go">Set sail</button></p>`;
- const e=$('port');e.innerHTML=h;e.style.display='block'}
+ SHIPS.forEach((x,i)=>{const cur=x===s,tp=Math.round(s.cost*.6);h+=`<tr><td>${x.n}</td><td>${x.cap} t</td><td>${x.spd} m/s</td><td>$${x.cost.toLocaleString()}</td><td>${cur?'<i>current</i>':`<button data-a="ship" data-i="${i}">Buy (trade-in $${tp.toLocaleString()})</button>`}</td></tr>`});
+ h+=`</table><p><button data-a="go">Set sail</button></p>`;$('port').innerHTML=h;$('port').style.display='block'}
 $('port').addEventListener('click',e=>{const b=e.target.closest('button');if(!b||!docked)return;const a=b.dataset.a,i=+b.dataset.i,s=S.ship,c=S.cargo;
  if(a==='go'){docked=null;$('port').style.display='none';return}
- if(a==='buy'){if(c.t>0&&c.type!==i)return toast('Empty your hold before loading a different cargo');
-  const lim=Math.floor(s.cap*1.3);let n=+b.dataset.n;const pr=price(docked,i);
-  if(n<0)n=Math.max(0,s.cap-c.t);n=Math.min(n,lim-c.t,Math.floor(S.money/pr));if(n<=0)return toast('Cannot load more (cash or hull limit)');
-  S.money-=n*pr;c.t+=n;c.type=i}
+ if(a==='buy'){if(c.t>0&&c.type!==i)return toast('Empty your hold before loading a different cargo');const lim=Math.floor(s.cap*1.3),pr=price(docked,i);let n=+b.dataset.n;if(n<0)n=Math.max(0,s.cap-c.t);n=Math.min(n,lim-c.t,Math.floor(S.money/pr));if(n<=0)return toast('Cannot load more (cash or hull limit)');S.money-=n*pr;c.t+=n;c.type=i}
  if(a==='sell'){S.money+=c.t*price(docked,c.type)*.95;c.t=0}
- if(a==='dump'||a==='less'){c.t=a==='dump'?0:Math.max(0,c.t-1)}
- if(a==='ship'){const x=SHIPS[i],cost=x.cost-Math.round(s.cost*.6);if(c.t>0)return toast('Unload your cargo before changing ships');
-  if(S.money<cost)return toast('Not enough cash');S.money-=cost;S.ship=x;S.water=0;S.hull=100;buildShip(x)}
+ if(a==='dump'||a==='less')c.t=a==='dump'?0:Math.max(0,c.t-1);
+ if(a==='ship'){const x=SHIPS[i],cost=x.cost-Math.round(s.cost*.6);if(c.t>0)return toast('Unload your cargo before changing ships');if(S.money<cost)return toast('Not enough cash');S.money-=cost;S.ship=x;S.water=0;S.hull=100;buildShip(x)}
  renderPort()});
 /* ---------- HUD / minimap ---------- */
 const mc=$('map').getContext('2d'),MX=x=>(x+1050)/2300*220,MZ=z=>(z+650)/1350*130;
 function hud(){
  const s=S.ship,c=S.cargo,r=c.t/s.cap,[p,d]=nearestPort();
  const bar=(v,col)=>`<div class="bar"><i style="width:${cl(v*100,0,100)}%;background:${col}"></i></div>`;
- $('hud').innerHTML=`<b>${s.n}</b> · $${Math.round(S.money).toLocaleString()}<br>Speed ${Math.abs(S.speed).toFixed(1)} m/s · throttle ${Math.round(S.thr*100)}%
- <br>Cargo ${c.t.toFixed(1)} / ${s.cap} t ${c.t>0?CARGO[c.type].n:''}`+bar(r,r>=1?'#e5484d':r>.85?'#d9a441':'#3fb67a')+
- `Hull ${Math.round(S.hull)}%`+bar(S.hull/100,S.hull<35?'#e5484d':'#3fb67a')+
- `Water aboard ${S.water.toFixed(1)} t`+bar(S.water/(s.cap*.4),'#4aa3df')+
+ $('hud').innerHTML=`<b>${s.n}</b> · $${Math.round(S.money).toLocaleString()}<br>Speed ${Math.abs(S.speed).toFixed(1)} m/s · throttle ${Math.round(S.thr*100)}%<br>Cargo ${c.t.toFixed(1)} / ${s.cap} t ${c.t>0?CARGO[c.type].n:''}`+bar(r,r>=1?'#e5484d':r>.85?'#d9a441':'#3fb67a')+
+ `Hull ${Math.round(S.hull)}%`+bar(S.hull/100,S.hull<35?'#e5484d':'#3fb67a')+`Water aboard ${S.water.toFixed(1)} t`+bar(S.water/(s.cap*.4),'#4aa3df')+
  `Heel ${(S.roll*57.3).toFixed(0)}° · trim ${(S.pitch*57.3).toFixed(0)}°<br>Nearest: ${p.n}, ${Math.round(d)} m`;
- const w=$('warn');let t='';
- if(S.state==='sail'){if(r>1)t='⚠ OVERLOADED — waves will wash the deck and you may sink';else if(r>.85)t='Heavy load — reduced freeboard';
-  if(S.water>s.cap*.15)t='⚠ FLOODING — '+S.water.toFixed(0)+' t of water aboard';if(Math.abs(S.roll)>.7)t='⚠ DANGEROUS HEEL — ease speed and turn into the swell'}
+ const w=$('warn');let t='';if(S.state==='sail'){if(r>1)t='⚠ OVERLOADED — even a small excess reduces your safety margin';else if(r>.85)t='Heavy load — reduced freeboard';if(S.water>s.cap*.15)t='⚠ FLOODING — '+S.water.toFixed(0)+' t of water aboard';if(Math.abs(S.roll)>.7)t='⚠ DANGEROUS HEEL — ease speed and turn into the swell'}
  w.style.display=t?'block':'none';w.textContent=t;
- const A=ampAt(S.x,S.z),sea=danger(S.x),zone=S.x<-400?'Still Lagoon':S.x>400?'Raging Deep':'Open Sea';
+ const A=ampAt(S.x,S.z),zone=S.x<-400?'Still Lagoon':S.x>400?'Raging Deep':'Open Sea';
  $('wx').innerHTML=`${WX[Math.round(wxLevel)]} · ${zone}<br>wave height ≈ ${(A*1.4*2).toFixed(1)} m · next: ${WX[wxNext]} in ${Math.max(0,Math.round(wxTimer))}s`;
- mc.clearRect(0,0,220,130);mc.fillStyle='#1c5b86';mc.fillRect(0,0,220,130);
- mc.fillStyle='#14405f';mc.fillRect(0,0,MX(-400),130);mc.fillStyle='#3a1f2c';mc.fillRect(MX(400),0,220,130);
+ mc.clearRect(0,0,220,130);mc.fillStyle='#1c5b86';mc.fillRect(0,0,220,130);mc.fillStyle='#14405f';mc.fillRect(0,0,MX(-400),130);mc.fillStyle='#3a1f2c';mc.fillRect(MX(400),0,220,130);
  mc.fillStyle='#6d8b4a';for(const l of [...ISL,...PORTS]){mc.beginPath();mc.arc(MX(l.x),MZ(l.z),l.r/10,0,7);mc.fill()}
  for(const w of WALLS)mc.fillRect(MX(w.x0),MZ(w.z0),(w.x1-w.x0)/10,(w.z1-w.z0)/10);
- mc.fillStyle='#d9a441';for(const q of PORTS){mc.fillRect(MX(q.bx)-2,MZ(q.bz)-2,4,4)}
+ mc.fillStyle='#d9a441';for(const q of PORTS)mc.fillRect(MX(q.bx)-2,MZ(q.bz)-2,4,4);
  mc.strokeStyle='#fff';mc.fillStyle='#fff';mc.beginPath();mc.arc(MX(S.x),MZ(S.z),3,0,7);mc.fill();mc.moveTo(MX(S.x),MZ(S.z));mc.lineTo(MX(S.x)+Math.sin(S.yaw)*10,MZ(S.z)+Math.cos(S.yaw)*10);mc.stroke();
 }
-/* ---------- input / loop ---------- */
-addEventListener('keydown',e=>{const k=e.key.toLowerCase();keys[k]=1;if(k==='e')docked?null:tryDock();if(k===' ')e.preventDefault()});
+/* ---------- first-person and controls ---------- */
+function updateWalkUI(){
+ $('modeBtn').textContent=walkMode?'Exit First-Person Walk (E)':'Enter First-Person Walk';
+ $('crosshair').style.display=walkMode?'block':'none';$('walkNote').style.display=walkMode?'block':'none';
+ $('help').textContent=walkMode?'FIRST PERSON: WASD move · Mouse look · Shift faster · E exit · Esc releases mouse':'Ship mode: W/S throttle · A/D rudder · Space stop · E dock · drag mouse to look · wheel to zoom';
+}
+function setWalkMode(on){
+ if(on&&docked){toast('Set sail before walking around the deck.');return}
+ walkMode=!!on;keys.w=keys.a=keys.s=keys.d=keys.shift=0;
+ if(walkMode){walkX=0;walkZ=-S.ship.L*.39;walkYaw=0;walkPitch=0;camDist=1}
+ else if(document.pointerLockElement===$('c'))document.exitPointerLock();
+ updateWalkUI();
+}
+$('modeBtn').addEventListener('click',()=>setWalkMode(!walkMode));
+$('c').addEventListener('click',()=>{if(walkMode&&document.pointerLockElement!==$('c'))$('c').requestPointerLock?.()});
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(walkMode){if(k==='e'&&!e.repeat){setWalkMode(false);return}keys[k]=1;if(['w','a','s','d',' '].includes(k))e.preventDefault();return}
+ keys[k]=1;if(k==='e')docked?null:tryDock();if(k===' ')e.preventDefault()});
 addEventListener('keyup',e=>keys[e.key.toLowerCase()]=0);
-let drag=0;addEventListener('pointerdown',e=>{if(e.target.id==='c')drag=1});addEventListener('pointerup',()=>drag=0);
-addEventListener('pointermove',e=>{if(drag){camYaw-=e.movementX*.005;camPit=cl(camPit+e.movementY*.004,.05,1.2)}});
-addEventListener('wheel',e=>{camDist=cl(camDist*(1+e.deltaY*.001),.5,3)});
+let drag=0;addEventListener('pointerdown',e=>{if(e.target.id==='c'&&!walkMode)drag=1});addEventListener('pointerup',()=>drag=0);
+addEventListener('pointermove',e=>{if(walkMode&&document.pointerLockElement===$('c')){walkYaw-=e.movementX*.0025;walkPitch=cl(walkPitch-e.movementY*.002,-1.15,1.15)}else if(drag&&!walkMode){camYaw-=e.movementX*.005;camPit=cl(camPit+e.movementY*.004,.05,1.2)}});
+addEventListener('wheel',e=>{if(!walkMode)camDist=cl(camDist*(1+e.deltaY*.001),.5,3)});
+function updateFirstPerson(dt){
+ const s=S.ship,step=keys.shift?9:4.8;
+ let forward=(keys.w?1:0)-(keys.s?1:0),side=(keys.d?1:0)-(keys.a?1:0);
+ const len=Math.hypot(forward,side)||1;forward/=len;side/=len;
+ walkX+=Math.cos(walkYaw)*side*step*dt+Math.sin(walkYaw)*forward*step*dt;
+ walkZ+=Math.sin(walkYaw)*side*step*dt+Math.cos(walkYaw)*forward*step*dt;
+ walkX=cl(walkX,-s.W*.43,s.W*.43);walkZ=cl(walkZ,-s.L*.46,s.L*.46);
+ shipObj.updateMatrixWorld(true);
+ walkLocal.set(walkX,s.H+1.65,walkZ);walkWorld.copy(walkLocal).applyMatrix4(shipObj.matrixWorld);
+ const shipQ=new THREE.Quaternion().setFromEuler(shipObj.rotation);
+ const lookQ=new THREE.Quaternion().setFromEuler(new THREE.Euler(walkPitch,walkYaw,0,'YXZ'));
+ cam.position.copy(walkWorld);cam.quaternion.copy(shipQ).multiply(lookQ);
+}
 function resize(){R.setSize(innerWidth,innerHeight,false);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}addEventListener('resize',resize);resize();
 let last=performance.now(),hudT=0;
 function loop(now){
  requestAnimationFrame(loop);const dt=Math.min(.05,(now-last)/1000);last=now;T+=dt;
  weather(dt);for(let i=0;i<2;i++)physics(dt/2);
- // visuals
  shipObj.rotation.set(S.pitch,S.yaw,S.roll,'YXZ');shipObj.position.set(S.x,S.y,S.z);
  const c=S.cargo,H=S.ship.H,ch=cl(c.t/S.ship.cap,0,1.5)*H*1.1;
  cargoMesh.visible=c.t>0.05;if(cargoMesh.visible){cargoMesh.scale.set(S.ship.W*.8,Math.max(.1,ch),S.ship.L*.38);cargoMesh.position.set(0,H+ch/2,S.ship.L*.08);cargoMesh.material.color.setHex(CCOL[c.type])}
  const d=(35+S.ship.L*1.6)*camDist,ang=S.yaw+Math.PI+camYaw;
- const tx=S.x+Math.sin(ang)*d*Math.cos(camPit),tz=S.z+Math.cos(ang)*d*Math.cos(camPit);
- const sy=Math.max(S.y,-5);cam.position.lerp(new THREE.Vector3(tx,sy+4+d*Math.sin(camPit)+Math.abs(S.worst||0)*0,tz),.2);
- cam.position.y=Math.max(cam.position.y,waveH(cam.position.x,cam.position.z,ampAt(cam.position.x,cam.position.z))+2);
- cam.lookAt(S.x,sy+S.ship.H*1.5,S.z);
- rain.position.copy(cam.position).add(new THREE.Vector3(0,-8,0));
- updateOcean(S.x,S.z);
+ const tx=S.x+Math.sin(ang)*d*Math.cos(camPit),tz=S.z+Math.cos(ang)*d*Math.cos(camPit),sy=Math.max(S.y,-5);
+ if(walkMode)updateFirstPerson(dt);else{
+  cam.position.lerp(new THREE.Vector3(tx,sy+4+d*Math.sin(camPit),tz),.2);
+  cam.position.y=Math.max(cam.position.y,waveH(cam.position.x,cam.position.z,ampAt(cam.position.x,cam.position.z))+2);
+  cam.lookAt(S.x,sy+S.ship.H*1.35,S.z);
+ }
+ rain.position.copy(cam.position).add(new THREE.Vector3(0,-8,0));updateOcean(S.x,S.z);
  if(msgT>0){msgT-=dt;if(msgT<=0)$('msg').style.display='none'}
  hudT-=dt;if(hudT<=0){hud();hudT=.1}
  R.render(scene,cam);
 }
-newGame(1000);toast('Hold E near a golden beacon to dock and trade. Mind the weather!',5000);requestAnimationFrame(loop);
+newGame(1000);toast('CAPTAIN’S LEDGER  •  Hold E near a golden beacon to dock and trade. Mind the weather!',6000);requestAnimationFrame(loop);
 </script></body></html>
